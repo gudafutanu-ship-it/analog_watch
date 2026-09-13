@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>ストップウォッチ</title>
+
+  <!-- iOS / PWA 用設定 -->
+  <link rel="manifest" href="manifest.json">
+  <link rel="apple-touch-icon" href="icon-192.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="ストップウォッチ">
+
+  <style>
+    * {
+      box-sizing: border-box;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, sans-serif;
+      background-color: #121214;
+      color: #ffffff;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      margin: 0;
+      overflow: hidden;
+    }
+
+    /* キャンバス（アナログ文字盤） */
+    #watchCanvas {
+      width: 320px;
+      height: 320px;
+      max-width: 85vw;
+      max-height: 85vw;
+    }
+
+    /* デジタルタイム補助表示 */
+    #digitalDisplay {
+      font-size: 1.8rem;
+      font-weight: 300;
+      font-family: monospace;
+      color: #8e8e93;
+      margin-top: 15px;
+      margin-bottom: 25px;
+      letter-spacing: 1px;
+    }
+
+    /* 操作ボタン */
+    .buttons {
+      display: flex;
+      gap: 20px;
+    }
+
+    button {
+      font-size: 1.1rem;
+      font-weight: 600;
+      width: 110px;
+      padding: 12px 0;
+      border: none;
+      border-radius: 25px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      box-shadow: 0 4px 10px rgba(0, 0, 0, 0.4);
+    }
+
+    #startStopBtn {
+      background-color: #4CAF50;
+      color: #ffffff;
+    }
+
+    #startStopBtn.stop {
+      background-color: #e53935;
+    }
+
+    #resetBtn {
+      background-color: #2c2c2e;
+      color: #8e8e93;
+    }
+
+    #resetBtn:active {
+      background-color: #3a3a3c;
+    }
+
+    button:active {
+      transform: scale(0.96);
+    }
+  </style>
+</head>
+<body>
+
+  <!-- アナログ時計キャンバス -->
+  <canvas id="watchCanvas" width="600" height="600"></canvas>
+
+  <!-- 補助用のデジタル表示 -->
+  <div id="digitalDisplay">00:00.00</div>
+
+  <!-- 操作ボタン -->
+  <div class="buttons">
+    <button id="startStopBtn">スタート</button>
+    <button id="resetBtn">クリア</button>
+  </div>
+
+  <script>
+    const canvas = document.getElementById('watchCanvas');
+    const ctx = canvas.getContext('2d');
+    const digitalDisplay = document.getElementById('digitalDisplay');
+    const startStopBtn = document.getElementById('startStopBtn');
+    const resetBtn = document.getElementById('resetBtn');
+
+    let startTime = 0;
+    let elapsedTime = 0;
+    let animationFrameId = null;
+    let isRunning = false;
+
+    const width = canvas.width;
+    const height = canvas.height;
+    const cx = width / 2;
+    const cy = height / 2;
+    const radius = width * 0.42;
+
+    // アナログ時計を描く描画関数
+    function drawClock(timeMs) {
+      ctx.clearRect(0, 0, width, height);
+
+      // --- 1. 外枠ベゼル ---
+      ctx.beginPath();
+      ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+      ctx.fillStyle = '#1c1c1e';
+      ctx.fill();
+      ctx.lineWidth = 12;
+      ctx.strokeStyle = '#2c2c2e';
+      ctx.stroke();
+
+      // --- 2. 目盛りを描く ---
+      for (let i = 0; i < 60; i++) {
+        const angle = (i * 6) * Math.PI / 180;
+        const isMajor = i % 5 === 0;
+        const innerR = radius - (isMajor ? 28 : 16);
+        const outerR = radius - 10;
+
+        ctx.beginPath();
+        ctx.moveTo(cx + Math.sin(angle) * innerR, cy - Math.cos(angle) * innerR);
+        ctx.lineTo(cx + Math.sin(angle) * outerR, cy - Math.cos(angle) * outerR);
+        ctx.lineWidth = isMajor ? 5 : 2;
+        ctx.strokeStyle = isMajor ? '#ffffff' : '#55555e';
+        ctx.stroke();
+      }
+
+      // --- 3. 30分積算計（小さなサブダイヤル） ---
+      const subCy = cy - radius * 0.4;
+      const subR = radius * 0.26;
+
+      ctx.beginPath();
+      ctx.arc(cx, subCy, subR, 0, Math.PI * 2);
+      ctx.fillStyle = '#141416';
+      ctx.fill();
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = '#44444a';
+      ctx.stroke();
+
+      // サブダイヤルの目盛り（30分計）
+      for (let i = 0; i < 30; i += 5) {
+        const angle = (i * 12) * Math.PI / 180;
+        const innerR = subR - 8;
+        const outerR = subR - 3;
+        ctx.beginPath();
+        ctx.moveTo(cx + Math.sin(angle) * innerR, subCy - Math.cos(angle) * innerR);
+        ctx.lineTo(cx + Math.sin(angle) * outerR, subCy - Math.cos(angle) * outerR);
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = '#aaa';
+        ctx.stroke();
+      }
+
+      // サブダイヤルの分針
+      const minutes = (timeMs / 60000) % 30;
+      const minAngle = (minutes * 12) * Math.PI / 180;
+      ctx.beginPath();
+      ctx.moveTo(cx, subCy);
+      ctx.lineTo(cx + Math.sin(minAngle) * (subR - 6), subCy - Math.cos(minAngle) * (subR - 6));
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = '#4CAF50';
+      ctx.stroke();
+
+      // --- 4. メインの秒針 ---
+      const seconds = (timeMs / 1000) % 60;
+      const secAngle = (seconds * 6) * Math.PI / 180;
+
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate(secAngle);
+
+      // 秒針の描画
+      ctx.beginPath();
+      ctx.moveTo(0, 35); // 後ろの伸び
+      ctx.lineTo(0, -(radius - 20)); // 針の先
+      ctx.lineWidth = 4;
+      ctx.strokeStyle = '#4CAF50';
+      ctx.lineCap = 'round';
+      ctx.stroke();
+
+      // 針の中心（ピボット）
+      ctx.beginPath();
+      ctx.arc(0, 0, 8, 0, Math.PI * 2);
+      ctx.fillStyle = '#ffffff';
+      ctx.fill();
+
+      ctx.restore();
+    }
+
+    // デジタルテキストを更新する関数
+    function updateDigitalDisplay(timeMs) {
+      const mins = Math.floor((timeMs / 60000) % 60).toString().padStart(2, '0');
+      const secs = Math.floor((timeMs / 1000) % 60).toString().padStart(2, '0');
+      const ms = Math.floor((timeMs / 10) % 100).toString().padStart(2, '0');
+      digitalDisplay.textContent = `${mins}:${secs}.${ms}`;
+    }
+
+    // アニメーションループ (60fps)
+    function render() {
+      if (isRunning) {
+        elapsedTime = Date.now() - startTime;
+        animationFrameId = requestAnimationFrame(render);
+      }
+      drawClock(elapsedTime);
+      updateDigitalDisplay(elapsedTime);
+    }
+
+    // スタート・ストップボタンの挙動
+    startStopBtn.addEventListener('click', () => {
+      if (!isRunning) {
+        // スタート
+        isRunning = true;
+        startTime = Date.now() - elapsedTime;
+        render();
+
+        startStopBtn.textContent = 'ストップ';
+        startStopBtn.classList.add('stop');
+      } else {
+        // ストップ
+        isRunning = false;
+        cancelAnimationFrame(animationFrameId);
+
+        startStopBtn.textContent = 'スタート';
+        startStopBtn.classList.remove('stop');
+      }
+    });
+
+    // クリアボタンの挙動
+    resetBtn.addEventListener('click', () => {
+      isRunning = false;
+      cancelAnimationFrame(animationFrameId);
+
+      elapsedTime = 0;
+      drawClock(0);
+      updateDigitalDisplay(0);
+
+      startStopBtn.textContent = 'スタート';
+      startStopBtn.classList.remove('stop');
+    });
+
+    // 初期状態の描画
+    drawClock(0);
+  </script>
+</body>
+</html>
